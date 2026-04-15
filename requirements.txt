@@ -1,0 +1,9 @@
+pandas
+pyarrow
+duckdb
+fastapi
+uvicorn
+qdrant-client
+python-dotenv
+tqdm
+openai
