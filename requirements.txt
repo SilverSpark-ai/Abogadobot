@@ -1,9 +1,24 @@
+# Core
+numpy
 pandas
-pyarrow
-duckdb
+
+# Embeddings (local)
+sentence-transformers
+transformers
+torch
+
+# Vector DB
+qdrant-client
+
+# HTTP / API
+requests
+httpx
+
+# Backend (para el siguiente paso)
 fastapi
 uvicorn
-qdrant-client
-python-dotenv
+
+# Utils
 tqdm
-openai
+python-dotenv
+pydantic
