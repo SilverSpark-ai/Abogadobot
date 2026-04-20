@@ -1,0 +1,29 @@
+# CPU-only torch
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# Core
+numpy
+pandas
+
+# Embeddings / NLP
+torch
+sentence-transformers
+
+# Vector DB
+qdrant-client
+
+# HTTP / API
+requests
+httpx
+
+# Backend
+fastapi
+uvicorn
+
+# Utils / DB
+tqdm
+python-dotenv
+pydantic
+sqlalchemy
+pymysql
+cryptography
