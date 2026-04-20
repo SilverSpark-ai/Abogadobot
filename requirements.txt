@@ -22,3 +22,7 @@ uvicorn
 tqdm
 python-dotenv
 pydantic
+sqlalchemy
+pymysql
+cryptography
+pyarrow
