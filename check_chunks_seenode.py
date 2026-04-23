@@ -11,22 +11,22 @@ import pymysql
 from dotenv import load_dotenv
 
 
-def log(msg: str) -> None:
+def log(msg):
     print(msg, flush=True)
 
 
-def load_environment() -> None:
+def load_environment():
     env_path = Path(__file__).resolve().parent / ".env"
-    log(f"📄 Buscando .env en: {env_path}")
+    log(f"Buscando .env en: {env_path}")
 
-    if env_path.exists():
-        load_dotenv(dotenv_path=env_path, override=True)
-        log("✅ .env cargado correctamente")
-    else:
-        log("⚠️ No encontré .env en la misma carpeta del script")
+    if not env_path.exists():
+        raise FileNotFoundError(f"No encontré el archivo .env en: {env_path}")
+
+    load_dotenv(dotenv_path=env_path, override=True)
+    log(".env cargado correctamente")
 
 
-def parse_db_url(db_url: str) -> dict:
+def parse_db_url(db_url):
     cleaned = db_url.replace("mysql+pymysql://", "mysql://")
     parsed = urlparse(cleaned)
 
@@ -48,15 +48,14 @@ def parse_db_url(db_url: str) -> dict:
         "charset": "utf8mb4",
         "cursorclass": pymysql.cursors.DictCursor,
         "connect_timeout": 15,
-        "read_timeout": 15,
-        "write_timeout": 15,
+        "read_timeout": 30,
+        "write_timeout": 30,
         "autocommit": True,
     }
 
 
 def connect():
     db_url = os.getenv("DATABASE_URL", "").strip()
-
     if not db_url:
         raise RuntimeError("DATABASE_URL no está definido en el .env")
 
@@ -67,218 +66,122 @@ def connect():
             proto_user, _pwd = left.rsplit(":", 1)
             safe_url = proto_user + ":****@" + right
 
-    log(f"🔌 Intentando conectar con DATABASE_URL: {safe_url}")
-
-    config = parse_db_url(db_url)
-    conn = pymysql.connect(**config)
-    log("✅ Conexión MySQL exitosa")
+    log(f"Intentando conectar con DATABASE_URL: {safe_url}")
+    conn = pymysql.connect(**parse_db_url(db_url))
+    log("Conexión MySQL exitosa")
     return conn
 
 
-def show_tables(conn) -> list[str]:
+def show_tables(conn):
     with conn.cursor() as cur:
         cur.execute("SHOW TABLES;")
         rows = cur.fetchall()
 
     tables = [list(row.values())[0] for row in rows]
 
-    log("\n📦 TABLAS EN LA DB:")
-    if not tables:
-        log("   (no hay tablas)")
-    else:
-        for t in tables:
-            log(f" - {t}")
+    log("\nTABLAS EN LA DB:")
+    for t in tables:
+        log(f"- {t}")
 
     return tables
 
 
-def show_columns(conn, table: str) -> list[str]:
+def show_columns(conn, table):
     with conn.cursor() as cur:
         cur.execute(f"SHOW COLUMNS FROM `{table}`;")
         rows = cur.fetchall()
 
     cols = [row["Field"] for row in rows]
 
-    log(f"\n🧬 COLUMNAS DE `{table}`:")
-    if not cols:
-        log("   (sin columnas)")
-    else:
-        for c in cols:
-            log(f" - {c}")
+    log(f"\nCOLUMNAS DE `{table}`:")
+    for c in cols:
+        log(f"- {c}")
 
     return cols
 
 
-def guess_table(tables: list[str]) -> str | None:
-    preferred_names = [
-        "chunks",
-        "document_chunks",
-        "documents",
-        "embeddings",
-        "legal_chunks",
-        "chunked_documents",
-    ]
-
-    lowered = {t.lower(): t for t in tables}
-
-    for name in preferred_names:
-        if name.lower() in lowered:
-            return lowered[name.lower()]
-
-    for t in tables:
-        tl = t.lower()
-        if "chunk" in tl or "embed" in tl or "doc" in tl:
-            return t
-
-    return tables[0] if tables else None
-
-
-def guess_text_column(columns: list[str]) -> str | None:
-    preferred = [
-        "chunk_text",
-        "text",
-        "content",
-        "chunk",
-        "document_text",
-        "body",
-    ]
-
-    lowered = {c.lower(): c for c in columns}
-
-    for name in preferred:
-        if name.lower() in lowered:
-            return lowered[name.lower()]
-
-    for c in columns:
-        cl = c.lower()
-        if "text" in cl or "content" in cl or cl == "chunk":
-            return c
-
-    return None
-
-
-def guess_order_column(columns: list[str]) -> str | None:
-    preferred = ["id", "chunk_id", "created_at", "updated_at"]
-
-    lowered = {c.lower(): c for c in columns}
-
-    for name in preferred:
-        if name.lower() in lowered:
-            return lowered[name.lower()]
-
-    return columns[0] if columns else None
-
-
-def count_rows(conn, table: str) -> int:
+def count_rows(conn, table):
     with conn.cursor() as cur:
         cur.execute(f"SELECT COUNT(*) AS total FROM `{table}`;")
         row = cur.fetchone()
     return int(row["total"])
 
 
-def show_sample_rows(conn, table: str, limit: int = 5) -> None:
-    with conn.cursor() as cur:
-        cur.execute(f"SELECT * FROM `{table}` LIMIT %s;", (limit,))
-        rows = cur.fetchall()
-
-    log(f"\n🧪 MUESTRA BRUTA DE `{table}`:")
-    if not rows:
-        log("   (sin filas)")
-        return
-
-    for i, row in enumerate(rows, 1):
-        log("-" * 80)
-        log(f"[fila {i}]")
-        for k, v in row.items():
-            text = str(v)
-            if len(text) > 300:
-                text = text[:300] + " ...[recortado]"
-            log(f"{k}: {text}")
-
-
-def show_chunks(conn, table: str, text_col: str, order_col: str | None, limit: int = 10) -> None:
-    order_sql = f"ORDER BY `{order_col}` DESC" if order_col else ""
-    sql = f"SELECT * FROM `{table}` {order_sql} LIMIT %s;"
+def preview_chunks(conn, table="chunks", text_col="text", order_col="id", limit=3, preview_len=300):
+    sql = f"""
+        SELECT `{order_col}` AS row_id, `{text_col}` AS chunk_text
+        FROM `{table}`
+        ORDER BY `{order_col}` DESC
+        LIMIT %s
+    """
 
     with conn.cursor() as cur:
         cur.execute(sql, (limit,))
         rows = cur.fetchall()
 
-    log(f"\n🔥 MOSTRANDO {len(rows)} FILAS DESDE `{table}`:\n")
+    log(f"\nMOSTRANDO {len(rows)} CHUNKS DE PRUEBA:\n")
 
     if not rows:
-        log("No hay datos en esa tabla.")
+        log("No hay filas en la tabla.")
         return
 
     for i, row in enumerate(rows, 1):
-        log("=" * 100)
-        log(f"[{i}]")
+        text = row.get("chunk_text") or ""
+        preview = text[:preview_len].replace("\r", " ").replace("\n", " ")
 
-        if order_col and order_col in row:
-            log(f"{order_col}: {row[order_col]}")
-
-        if text_col in row:
-            value = row[text_col]
-            log(f"\n📝 {text_col}:\n")
-            log(str(value) if value is not None else "(NULL)")
-        else:
-            log(f"⚠️ No se encontró la columna de texto '{text_col}' en la fila")
-            log("Columnas disponibles: " + ", ".join(row.keys()))
-
-        log("=" * 100)
+        log("=" * 80)
+        log(f"[{i}] id = {row.get('row_id')}")
+        log(f"largo = {len(text)} caracteres")
+        log("preview:")
+        log(preview)
+        if len(text) > preview_len:
+            log("...[recortado]")
+        log("=" * 80)
 
 
-def main() -> None:
-    log("🚀 Script iniciado")
+def main():
+    log("INICIO")
     load_environment()
 
-    database_url = os.getenv("DATABASE_URL")
-    log(f"🔍 DATABASE_URL cargado: {'sí' if database_url else 'no'}")
+    db_url_exists = "sí" if os.getenv("DATABASE_URL") else "no"
+    log(f"DATABASE_URL cargado: {db_url_exists}")
 
     conn = connect()
-
     try:
         tables = show_tables(conn)
-        if not tables:
-            log("\n⚠️ La base de datos está vacía o no tiene tablas.")
-            return
+        if "chunks" not in tables:
+            raise RuntimeError("La tabla 'chunks' no existe")
 
-        table = guess_table(tables)
-        log(f"\n🎯 Tabla elegida automáticamente: {table}")
+        cols = show_columns(conn, "chunks")
 
-        columns = show_columns(conn, table)
-        if not columns:
-            log("\n⚠️ Esa tabla no tiene columnas.")
-            return
+        if "text" not in cols:
+            raise RuntimeError("La columna 'text' no existe en la tabla 'chunks'")
 
-        text_col = guess_text_column(columns)
-        order_col = guess_order_column(columns)
+        total = count_rows(conn, "chunks")
+        log(f"\nTotal de filas en `chunks`: {total}")
 
-        log(f"\n🧠 Columna de texto detectada: {text_col}")
-        log(f"🧠 Columna de orden detectada: {order_col}")
+        preview_chunks(
+            conn,
+            table="chunks",
+            text_col="text",
+            order_col="id",
+            limit=3,
+            preview_len=300
+        )
 
-        total = count_rows(conn, table)
-        log(f"\n📊 Total de filas en `{table}`: {total}")
-
-        show_sample_rows(conn, table, limit=3)
-
-        if text_col:
-            show_chunks(conn, table, text_col, order_col, limit=10)
-        else:
-            log("\n⚠️ No pude detectar automáticamente una columna de texto.")
-            log("Revisa la muestra bruta de arriba y dime qué columna contiene los chunks.")
+        log("\nOK: los chunks sí están subidos en la base de datos.")
 
     finally:
         conn.close()
-        log("\n🔒 Conexión cerrada")
+        log("\nConexión cerrada")
 
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        log("\n💀 ERROR FATAL:")
+        log("\nERROR FATAL:")
         log(str(e))
-        log("\n🧵 TRACEBACK:")
+        log("\nTRACEBACK:")
         traceback.print_exc()
         sys.exit(1)
